@@ -6,17 +6,10 @@ import {
 } from "@auth0/auth0-react";
 import { useRouter } from "next/navigation";
 
+import { requireEnv } from "@/lib/utils/env";
+
 interface Auth0ProviderProps {
   children: React.ReactNode;
-}
-
-function requireEnv(name: string, value: string | undefined): string {
-  if (!value) {
-    throw new Error(
-      `Missing ${name}. Set it in .env.local (dev) or your deployment env (Vercel).`
-    );
-  }
-  return value;
 }
 
 export function Auth0Provider({ children }: Auth0ProviderProps) {

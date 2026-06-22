@@ -54,14 +54,12 @@ function formatDateRange(
 
 function ExperienceCard({
   experience,
-  isFirst,
   isLast,
   onEdit,
   onDelete,
   isDeleting,
 }: {
   experience: Pick<Experience, 'id' | 'position' | 'companyName' | 'startYear' | 'endYear' | 'description'>;
-  isFirst: boolean;
   isLast: boolean;
   onEdit?: () => void;
   onDelete?: () => void;
@@ -307,7 +305,6 @@ export function ExperienceForm({ experiences, onAdd, onUpdate, onDelete, isLoadi
               <ExperienceCard
                 key={experience.id}
                 experience={experience}
-                isFirst={index === 0}
                 isLast={index === sortedExperiences.length - 1 && !isAddingNew}
                 onEdit={() => handleEditExperience(experience.id)}
                 onDelete={() => handleDeleteExperience(experience.id)}
@@ -362,7 +359,6 @@ export function ExperienceForm({ experiences, onAdd, onUpdate, onDelete, isLoadi
             <ExperienceCard
               key={experience.id}
               experience={experience}
-              isFirst={index === 0}
               isLast={index === sortedExperiences.length - 1}
             />
           ))}

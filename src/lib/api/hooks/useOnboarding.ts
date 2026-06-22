@@ -12,13 +12,6 @@ import type {
   OnboardingSession,
 } from "@/lib/api/types";
 
-function invalidateProfile(qc: ReturnType<typeof useQueryClient>) {
-  qc.invalidateQueries({ queryKey: queryKeys.me });
-  qc.invalidateQueries({ queryKey: queryKeys.developerMe });
-  qc.invalidateQueries({ queryKey: queryKeys.onboardingMe });
-  qc.invalidateQueries({ queryKey: queryKeys.onboardingDraft });
-}
-
 /**
  * Active onboarding session for the current user. Returns null for 404 (no
  * active session) so EnsureProfile-style consumers can branch without

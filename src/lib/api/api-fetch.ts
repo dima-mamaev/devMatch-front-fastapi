@@ -1,8 +1,15 @@
+import { requireEnv } from "@/lib/utils/env";
 import { setQueryParams } from "./api-utils";
-import { getToken } from "./tokenStore";
+import { getToken, refreshToken } from "./tokenStore";
 
-export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ?? "http://localhost:4000";
+// Required at module load — a missing ``NEXT_PUBLIC_API_URL`` in prod
+// previously fell back to ``http://localhost:4000``, baking localhost
+// into the user-facing bundle. Failing loudly here surfaces the misconfig
+// before the first request goes out.
+export const API_BASE_URL = requireEnv(
+  "NEXT_PUBLIC_API_URL",
+  process.env.NEXT_PUBLIC_API_URL,
+).replace(/\/$/, "");
 
 export class ApiError extends Error {
   status: number;
@@ -47,13 +54,19 @@ export interface ApiFetchOptions {
   headers?: HeadersInit;
   body?: BodyInit | null;
   signal?: AbortSignal;
+  /**
+   * Internal — set automatically when ``apiFetch`` retries itself after a
+   * 401 + token refresh. Bounds the retry to one attempt so a non-token
+   * 401 (real permission denied) can't trigger an infinite loop.
+   */
+  _retried?: boolean;
 }
 
 export async function apiFetch<T = unknown>(
   path: string,
   opts: ApiFetchOptions = {},
 ): Promise<T> {
-  const { method = "GET", params, headers, body, signal } = opts;
+  const { method = "GET", params, headers, body, signal, _retried = false } = opts;
   const token = await getToken();
   const isFormData = body instanceof FormData;
   const mergedHeaders: Record<string, string> = {
@@ -73,6 +86,17 @@ export async function apiFetch<T = unknown>(
     body,
     signal,
   });
+
+  // 401 + we haven't retried yet → ask Auth0 for a fresh token, retry once.
+  // If the refresh fails (e.g. user's Auth0 session expired) ``refreshToken``
+  // returns null and we fall through to the normal error path — the toast
+  // user sees then is the right signal to sign in again.
+  if (response.status === 401 && !_retried) {
+    const freshToken = await refreshToken();
+    if (freshToken) {
+      return apiFetch<T>(path, { ...opts, _retried: true });
+    }
+  }
 
   if (!response.ok) throw await parseError(response);
   if (response.status === 204) return null as T;

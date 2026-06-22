@@ -96,7 +96,7 @@ export function OnboardingStepRole({ onBack, onContinue, initialData, isSubmitti
             <div className="mb-5">
               <h2 className="text-[22px] font-extrabold text-slate-900">Role & location</h2>
               <p className="text-sm text-slate-500 mt-1">
-                Tell companies what you do and where you're based.
+                Tell companies what you do and where you&apos;re based.
               </p>
             </div>
             <div className="mb-4">

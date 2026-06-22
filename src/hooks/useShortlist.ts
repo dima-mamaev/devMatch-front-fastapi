@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   useAddToShortlist,
@@ -25,7 +25,12 @@ export function useShortlist() {
   const [localShortlistIds, setLocalShortlistIds] = useState<string[]>([]);
 
   useEffect(() => {
+    // Hydrate guest shortlist from localStorage on the client only. SSR
+    // can't read localStorage, so we defer to an effect — intentional
+    // setState-in-effect, exactly the "external system → React state"
+    // pattern the rule's docs say is fine.
     if (isLocalMode) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLocalShortlistIds(getLocalShortlist());
     }
   }, [isLocalMode]);
@@ -37,7 +42,13 @@ export function useShortlist() {
   const removeMutation = useRemoveFromShortlist();
   const clearMutation = useClearShortlist();
 
-  const apiShortlist = shortlistQuery.data ?? [];
+  // Stable reference for the `useCallback` deps below — without useMemo,
+  // the ``?? []`` fallback synthesizes a new empty array every render and
+  // invalidates the callback's memo.
+  const apiShortlist = useMemo(
+    () => shortlistQuery.data ?? [],
+    [shortlistQuery.data],
+  );
   const apiShortlistCount = countQuery.data?.count ?? 0;
 
   const shortlistCount = isLocalMode ? localShortlistIds.length : apiShortlistCount;

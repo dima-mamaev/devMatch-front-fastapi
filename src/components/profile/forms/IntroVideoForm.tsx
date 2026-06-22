@@ -26,7 +26,13 @@ export function IntroVideoForm({
   const isReady = introVideo?.processingStatus === "Ready";
 
   useEffect(() => {
+    // Mirror the async backend state into local UI state — once the server
+    // reports Processing or Ready we can drop the optimistic "uploading"
+    // spinner. setState-in-effect is intentional here (we're syncing local
+    // state to an async-loaded external value, which is what the rule
+    // exempts in its own docs).
     if (introVideo && (isProcessing || isReady)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setIsWaitingForProcessing(false);
     }
   }, [introVideo, isProcessing, isReady]);

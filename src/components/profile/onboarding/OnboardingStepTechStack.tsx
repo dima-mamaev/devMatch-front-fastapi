@@ -104,7 +104,7 @@ export function OnboardingStepTechStack({ onBack, onContinue, initialData, isSub
             <div className="mb-5">
               <h2 className="text-[22px] font-extrabold text-slate-900">Tech stack</h2>
               <p className="text-sm text-slate-500 mt-1">
-                Pick everything you're comfortable shipping with.
+                Pick everything you&apos;re comfortable shipping with.
               </p>
             </div>
             {techStack.length > 0 && (

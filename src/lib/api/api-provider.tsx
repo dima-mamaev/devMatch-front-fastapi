@@ -11,7 +11,7 @@ import { toast } from "sonner";
 
 import { ApiContext } from "./api-context";
 import { ApiError, apiFetch, unwrapDetail } from "./api-fetch";
-import { setTokenGetter } from "./tokenStore";
+import { setTokenGetter, setTokenRefresher } from "./tokenStore";
 import type { MutationVariables } from "./types";
 
 export { API_BASE_URL, ApiError, apiFetch, unwrapDetail } from "./api-fetch";
@@ -26,6 +26,24 @@ export function ApiProvider({ children }: PropsWithChildren) {
       ? async () => {
           try {
             return await getAccessTokenSilently();
+          } catch {
+            return null;
+          }
+        }
+      : null,
+  );
+
+  // Refresher: forces Auth0 to bypass its in-memory token cache and fetch
+  // a fresh access token via the silent-renewal iframe (using the user's
+  // third-party Auth0 session cookie). Called by ``apiFetch`` exactly once
+  // after a 401, before retrying the original request. ``cacheMode: "off"``
+  // is what tells the SDK to skip its cache; without it we'd just get the
+  // same expired token back.
+  setTokenRefresher(
+    isAuthenticated
+      ? async () => {
+          try {
+            return await getAccessTokenSilently({ cacheMode: "off" });
           } catch {
             return null;
           }

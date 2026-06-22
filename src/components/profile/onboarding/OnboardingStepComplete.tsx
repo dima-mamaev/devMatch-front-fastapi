@@ -67,7 +67,7 @@ export function OnboardingStepComplete({
               Profile is live! 🚀
             </h2>
             <p className="text-sm text-slate-500 leading-relaxed text-center mb-6">
-              Companies can already discover you in the feed. You'll get notified when someone matches with you.
+              Companies can already discover you in the feed. You&apos;ll get notified when someone matches with you.
             </p>
             <div className="w-full bg-slate-50 border border-slate-200 rounded-2xl overflow-hidden mb-6">
               <div

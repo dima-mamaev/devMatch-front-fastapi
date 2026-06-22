@@ -1,196 +1,123 @@
-# DevMatch Frontend
+# CLAUDE.md
 
-## Overview
+Conventions and footguns specific to this repo. Everything visible from a
+file scan is in `README.md` — this file is for the non-obvious stuff.
 
-DevMatch is a developer talent marketplace that connects recruiters with developers. The frontend is a Next.js 16 application with React 19, using GraphQL for API communication and Auth0 for authentication.
+## Stack reality check
 
-## Tech Stack
+- **tanstack-query**, not Apollo. No GraphQL anywhere. No Redux.
+- **REST** via a custom `apiFetch` wrapper (`src/lib/api/api-fetch.ts`).
+- **Types are generated** from the backend's `/openapi.json` via
+  `swagger-typescript-api`. Don't hand-edit `src/lib/api/generated-types.ts`.
+- Package manager is **yarn**, not npm.
+- The backend lives in a **separate repo**
+  (`dima-mamaev/devMatch-backend-fastapi`). Don't expect to find it here.
 
-- **Framework:** Next.js 16.1.6 (App Router)
-- **React:** 19.2.3
-- **State Management:** Redux Toolkit + React Redux
-- **API:** Apollo Client + GraphQL
-- **Authentication:** Auth0
-- **Forms:** React Hook Form
-- **Styling:** Tailwind CSS 4
-- **Notifications:** Sonner (toast notifications)
-- **Type Generation:** GraphQL Codegen
+## Required conventions
 
-## Project Structure
+**1. Use the existing api-hook layer.** Every endpoint already has a
+typed wrapper in `src/lib/api/hooks/*.ts` (`useMe`, `useDevelopers`,
+`useOnboarding`, `useProfileMutations`, `useShortlistApi`, `useAIMatch`).
+Add to those files, don't sprinkle ad-hoc `useQuery({ queryFn: …})`
+calls in components. The wrappers also encode the queryKey conventions
+in `src/lib/api/queryKeys.ts` — touching keys without updating that file
+breaks cache invalidation.
 
-```
-src/
-├── app/                    # Next.js App Router pages
-│   ├── page.tsx           # Landing page
-│   ├── layout.tsx         # Root layout with providers
-│   ├── join/              # Role selection (Developer/Recruiter)
-│   ├── signin/            # Auth0 sign-in
-│   ├── contact/           # Contact page
-│   ├── legal/             # Legal/privacy page
-│   └── dashboard/         # Protected dashboard routes
-│       ├── page.tsx       # Developer feed (video cards)
-│       ├── developers/    # Developer listing & profiles
-│       ├── shortlist/     # Saved developers (max 5)
-│       ├── ai-match/      # AI matching feature (placeholder)
-│       ├── profile/       # User profile management
-│       └── settings/      # Account settings
-├── components/
-│   ├── ui/                # Reusable UI components
-│   ├── home/              # Landing page sections
-│   ├── auth/              # Auth components (ProtectedRoute)
-│   ├── layout/            # Layout components (Header, Footer, DashboardLayout)
-│   ├── profile/           # Profile forms and onboarding
-│   └── icons/             # SVG icon components
-├── hooks/
-│   ├── useAuth.ts         # Auth utilities
-│   └── useShortlist.ts    # Shortlist management (API + localStorage)
-├── lib/
-│   ├── graphql/
-│   │   ├── operations.ts  # GraphQL queries & mutations
-│   │   └── generated.ts   # Auto-generated types & hooks
-│   ├── graphql.ts         # Apollo client setup
-│   └── localShortlist.ts  # localStorage utilities for guest shortlist
-├── providers/
-│   ├── Auth0Provider.tsx  # Auth0 configuration
-│   ├── ApolloProvider.tsx # Apollo Client setup
-│   ├── AuthStateSync.tsx  # Syncs Auth0 → Redux + shortlist sync
-│   └── StoreProvider.tsx  # Redux store provider
-└── store/
-    ├── index.ts           # Redux store configuration
-    ├── hooks.ts           # Typed Redux hooks
-    └── slices/
-        └── userSlice.ts   # User state management
-```
+**2. Cache invalidation on mutations is opinionated.** After mutating
+profile data, invalidate via the matching `queryKeys.*` entry — usually
+`queryKeys.me`, `queryKeys.developerMe`, or `queryKeys.recruiterMe`. The
+existing mutations in `useProfileMutations.ts` show the pattern. **Do NOT
+invalidate `onboardingMe` from `useCompleteOnboarding`** — it triggers
+a 404 refetch that briefly re-renders `InterviewIntro` before the
+wrapper releases. We learned this the hard way.
 
-## Key Features
+**3. AI Match streams via `fetch + ReadableStream`, not `EventSource`.**
+`EventSource` can't send POST bodies or `Authorization` headers. The
+SSE parser is `src/lib/api/sse.ts`. All event types are defined in
+`useAIMatch.ts`; the matching backend types live in
+`backend/app/ai_match/events.py`.
 
-### Authentication Flow
-1. User clicks "Join" → selects role (Developer/Recruiter)
-2. Role stored in localStorage → redirects to Auth0
-3. After Auth0 callback, `AuthStateSync` fetches user data via `getMe` query
-4. User/profile stored in Redux
-5. Local shortlist synced to API on login
+**4. Auth0 env vars validated at startup.** `Auth0Provider` throws if
+`NEXT_PUBLIC_AUTH0_DOMAIN` or `NEXT_PUBLIC_AUTH0_CLIENT_ID` is missing.
+Don't `??`-default them silently.
 
-### User Roles
-- **Developer:** Can create profile, upload intro video, add experience/projects
-- **Recruiter:** Can browse developers, manage shortlist, view profiles
+**5. Generated types are non-nullable where the backend says so.** Optional
+fields are typed `T | null | undefined`. The Pydantic backend ships
+optionals as `nullable: true` — the generator produces `?: T | null`,
+**not** required `T`. Don't add `!` non-null assertions on optional
+backend fields. Use the narrowing helper `asCompletedDeveloper` (in
+`src/lib/api/types.ts`) at the route gate when you need a fully-completed
+profile, then read fields without `!`.
 
-### Shortlist System
-- Recruiters can save up to 5 developers
-- Works for both authenticated (API) and non-authenticated (localStorage) users
-- Auto-syncs localStorage to API on login
-- Located in `useShortlist.ts` and `localShortlist.ts`
+**6. Generated typings vs hand-written.** `src/lib/api/generated-types.ts`
+is regen'd by `yarn gen:api` — never hand-edit, your changes disappear
+on next regen. Use `src/lib/api/types.ts` for hand-written aliases /
+narrowing helpers that the rest of the code imports from.
 
-### Developer Onboarding
-Multi-step onboarding flow for developers:
-1. Role selection
-2. Profile photo upload
-3. Intro video upload
-4. Tech stack selection
-5. Experience entry
-6. Social links
-7. Completion
+**7. ShortlistSync runs on auth-state flip only.** Guest puts dev IDs in
+localStorage; the moment Auth0 reports authenticated, `ShortlistSync`
+merges LS → API once, then clears LS. If you add new "guest state" that
+should migrate on signup, follow the same pattern (one-shot effect
+gated by an auth-flip ref).
 
-### Media Handling
-- Profile photos: Direct upload via GraphQL mutation
-- Intro videos: Upload with server-side processing (shows processing status)
-- Video thumbnails: Auto-generated server-side
+**8. The onboarding "manual + interview" flow is a state machine.** Lives
+in `src/components/profile/onboarding/useOnboardingStateMachine.ts`.
+Don't put new step-decision logic in `DeveloperOnboarding.tsx` — extend
+the hook instead. The wrapper-lock pattern (`showComplete` in
+`OnboardingContext`) keeps the parent stable during a save so the editor
+doesn't flash mid-write.
 
-## GraphQL Operations
+## Footguns
 
-### Queries
-- `GetMe` - Current user with profile
-- `GetDeveloper(id)` - Single developer profile
-- `GetDevelopers(filter, paging, sort)` - Developer listing
-- `GetMyShortlist` - User's shortlisted developers
-- `IsInMyShortlist(developerId)` - Check if developer is saved
+**Auto-resume orphan questions in AI Match.** If the user navigates away
+mid-stream, the user message survives (backend commits it immediately)
+but the assistant turn doesn't. On remount, `useAIMatch` detects the
+trailing user message and auto-fires `sendMessage` once. There's a
+`autoResumeRef` guard so a failed retry doesn't loop. Don't break this
+ref logic if you refactor the hook.
 
-### Mutations
-- `CreateDeveloperProfile` / `CreateRecruiterProfile`
-- `UpdateDeveloperProfile` / `UpdateRecruiterProfile`
-- `AddExperience` / `UpdateExperience` / `DeleteExperience`
-- `AddProject` / `UpdateProject` / `DeleteProject`
-- `UploadProfilePhoto` / `DeleteProfilePhoto`
-- `UploadIntroVideo` / `DeleteIntroVideo`
-- `AddToShortlist` / `RemoveFromShortlist` / `ClearMyShortlist`
-- `DeleteAccount`
+**Cache invalidation race in onboarding save.** `useCompleteOnboarding`
+intentionally invalidates only `me/developerMe/recruiterMe`, NOT
+`onboardingMe`. Touching `onboardingMe` causes a 404 refetch that briefly
+re-renders `InterviewIntro` while the wrapper is still flipping —
+visible flash. There's a comment in `useOnboarding.ts:useCompleteOnboarding`
+explaining this; don't ignore it.
 
-## Environment Variables
+**Stale ApiProvider tokens on Auth0 logout/login.** The token getter is
+re-registered in `ApiProvider` during render via `setTokenGetter(...)`.
+If you wrap the app in extra providers and somehow break that re-register,
+post-login requests use the pre-login token. Keep `ApiProvider` adjacent
+to `Auth0Provider` in `layout.tsx`.
 
-```env
-NEXT_PUBLIC_AUTH0_DOMAIN=       # Auth0 domain
-NEXT_PUBLIC_AUTH0_CLIENT_ID=    # Auth0 client ID
-NEXT_PUBLIC_AUTH0_AUDIENCE=     # Auth0 API audience
-NEXT_PUBLIC_GRAPHQL_URL=        # GraphQL API endpoint
-```
+**localStorage skip flag for the AI interview.** Per-developer-id key:
+`devmatch_onboarding_skip_interview:<devId>`. A developer who skipped
+once doesn't get the interview offer again on the same browser. Cleared
+when they explicitly choose to retry.
 
-## Scripts
+**`react-hooks/set-state-in-effect` lint rule.** Newer Next/React eslint
+config flags any `setState` directly inside `useEffect`. We have two
+intentional exceptions in `useOnboardingStateMachine.ts` and
+`DeveloperOnboarding.tsx` (data-mirror effects) with explicit
+`// eslint-disable-next-line` comments. If you add a new state-syncing
+effect, prefer render-time derivation; only reach for the suppression
+if the state genuinely needs to track an async-loaded value.
 
-```bash
-npm run dev          # Start development server
-npm run build        # Production build
-npm run start        # Start production server
-npm run lint         # Run ESLint
-npm run codegen      # Generate GraphQL types
-npm run codegen:watch # Watch mode for codegen
-```
+## Adding an AI Match feature event
 
-## State Management
+If the backend gains a new SSE event type (e.g. `INSIGHT_FOUND`):
 
-### Redux Store
-- `userSlice`: User authentication state
-  - `user`: Current user object
-  - `profile`: Developer or Recruiter profile
-  - `isLoading`: Loading state
-  - `error`: Error messages
-  - `showOnboardingComplete`: Onboarding completion modal
+1. Add the type to `AIMatchEventType` in `src/hooks/useAIMatch.ts`.
+2. Add a typed payload interface (search for `ConnectedPayload` for the pattern).
+3. Add a `case "INSIGHT_FOUND":` branch in `dispatchEvent` inside the same hook.
+4. If the working indicator should label it, add an entry to `TOOL_LABELS`
+   in `src/components/ai-match/AIWorkingIndicator.tsx`.
 
-### Key Selectors
-- `selectUser` / `selectProfile`
-- `selectIsDeveloper` / `selectIsRecruiter`
-- `selectOnboardingCompleted`
-- `selectIsUserLoading`
+## Style
 
-## Important Patterns
-
-### Apollo Hook Stability
-When using Apollo hooks in useEffect/useCallback dependencies, store them in refs to prevent infinite re-renders:
-```typescript
-const [mutate] = useSomeMutation();
-const mutateRef = useRef(mutate);
-mutateRef.current = mutate;
-
-const callback = useCallback(() => {
-  mutateRef.current({ variables: {...} });
-}, []); // Empty deps - stable reference
-```
-
-### Stable Empty Arrays
-When returning empty arrays conditionally, use constant references:
-```typescript
-const EMPTY_ARRAY: string[] = [];
-return isCondition ? someArray : EMPTY_ARRAY;
-```
-
-### Protected Routes
-Use `ProtectedRoute` component for auth-required pages:
-```tsx
-<ProtectedRoute requiredRoles={["Recruiter"]}>
-  <Component />
-</ProtectedRoute>
-```
-
-## API Integration
-
-The backend is a NestJS GraphQL API. The frontend uses:
-- Apollo Client for GraphQL communication
-- `apollo-upload-client` for file uploads
-- Auth0 access token in Authorization header
-
-## Styling Conventions
-
-- Tailwind CSS with custom color palette (indigo primary)
-- Rounded corners: `rounded-xl`, `rounded-2xl`
-- Shadows: `shadow-sm`
-- Font sizes: `text-xs`, `text-sm`, `text-base`
-- Spacing: Tailwind's default scale
+- Comments explain *why*, not *what*. No multi-paragraph docstrings.
+- No new `*.md` files unless explicitly asked.
+- Don't import from `@apollo/*` — there's no Apollo in the project.
+- Don't add `useReducer` for simple useState — react-query handles most server state.
+- No `npm run`; use `yarn` (the lockfile is `yarn.lock`).
+</content>
+</invoke>

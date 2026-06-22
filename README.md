@@ -1,6 +1,9 @@
 # DevMatch Frontend
 
-A modern developer talent marketplace built with Next.js 16 and React 19. Features AI-powered matching, real-time video profiles, and seamless recruiter-developer connections.
+Next.js 16 frontend for [DevMatch](https://github.com/dima-mamaev/devMatch-backend-fastapi)
+— a developer hiring platform. Recruiters chat with an AI matcher that
+searches the talent pool over both keyword and semantic vectors;
+developers onboard via a voice interview that auto-fills their profile.
 
 ## Architecture
 
@@ -9,185 +12,226 @@ A modern developer talent marketplace built with Next.js 16 and React 19. Featur
 │                              NEXT.JS APP ROUTER                             │
 │                                                                             │
 │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────────────────┐│
-│  │   Landing   │ │   Join /    │ │  Dashboard  │ │       AI Match          ││
-│  │    Page     │ │   SignIn    │ │    Pages    │ │         Page            ││
+│  │   Landing   │ │   Signin /  │ │  Dashboard  │ │       AI Match          ││
+│  │    Page     │ │   Welcome   │ │    Pages    │ │      Page (SSE)         ││
 │  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────────────────┘│
 │         │               │               │                    │              │
 │         └───────────────┴───────────────┴────────────────────┘              │
 │                                    │                                        │
 │  ┌─────────────────────────────────┴───────────────────────────────────────┐│
 │  │                            PROVIDERS                                    ││
-│  │  ┌───────────────┐  ┌───────────────┐  ┌───────────────────────────────┐││
-│  │  │ Auth0Provider │  │ ApolloProvider│  │      ShortlistSync            │││
-│  │  │   (Auth)      │  │   (GraphQL)   │  │  (localStorage → API sync)    │││
-│  │  └───────────────┘  └───────────────┘  └───────────────────────────────┘││
+│  │  ┌──────────────┐ ┌──────────────┐ ┌────────────────┐ ┌──────────────┐ ││
+│  │  │  Auth0       │ │  ApiProvider │ │ EnsureProfile  │ │ ShortlistSync│ ││
+│  │  │  Provider    │ │ (tanstack-q) │ │  (welcome gate)│ │ (LS → API)   │ ││
+│  │  └──────────────┘ └──────────────┘ └────────────────┘ └──────────────┘ ││
 │  └─────────────────────────────────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────────────────────────────────┘
          │                    │                              │
-         │                    │                              │
          ▼                    ▼                              ▼
 ┌─────────────────┐  ┌─────────────────┐           ┌─────────────────┐
-│     Auth0       │  │  GraphQL API    │◄─────────►│   localStorage  │
-│   (Identity)    │  │   (Backend)     │           │  (Guest State)  │
+│     Auth0       │  │   FastAPI       │◄─────────►│   localStorage  │
+│   (Identity)    │  │   (REST + SSE)  │           │  (Guest state)  │
 └─────────────────┘  └─────────────────┘           └─────────────────┘
 ```
 
 ## Data Flow
 
-### Authentication Flow
+### Signin → Welcome → Profile
 
 ```
 ┌──────────┐    ┌──────────┐    ┌──────────────────┐    ┌────────────────┐
-│   User   │───►│  /join   │───►│  Role Selection  │───►│    Auth0       │
-│  Visits  │    │  Page    │    │  Dev/Recruiter   │    │   Redirect     │
+│  User    │───►│  /signin │───►│      Auth0       │───►│  /dashboard    │
+│ Visits   │    │  page    │    │   (OAuth flow)   │    │   (callback)   │
 └──────────┘    └──────────┘    └──────────────────┘    └────────────────┘
                                                                │
-                    ┌──────────────────────────────────────────┘
-                    │
-                    ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│                         AUTH CALLBACK                                    │
-│                                                                          │
-│   1. Auth0 redirects back with tokens                                    │
-│   2. ApolloProvider attaches JWT to requests                             │
-│   3. GetMe query fetches user + profile                                  │
-│   4. ShortlistSync merges localStorage → API                             │
-│   5. User redirected to dashboard                                        │
-│                                                                          │
-└──────────────────────────────────────────────────────────────────────────┘
+                                                               ▼
+                ┌──────────────────────────────────────────────────────┐
+                │            EnsureProfile (provider)                  │
+                │                                                      │
+                │   GET /api/users/me  →                               │
+                │   • 200 → user has role → continue                   │
+                │   • 403 complete_signup_required → redirect /welcome │
+                │                                                      │
+                └──────────────────────────────────────────────────────┘
+                                                               │
+                                                               ▼
+                                        ┌────────────────────────────────┐
+                                        │   /welcome → pick role         │
+                                        │   • POST /api/developers       │
+                                        │     OR /api/recruiters         │
+                                        │   → cache invalidates → back   │
+                                        │     to /dashboard              │
+                                        └────────────────────────────────┘
 ```
 
-### AI Match Flow
+### AI Match — Recruiter chat (SSE)
 
 ```
-┌──────────┐    ┌──────────┐    ┌──────────────┐    ┌──────────────────┐
-│  User    │───►│  Chat    │───►│  GraphQL     │───►│   AI Agent       │
-│  Prompt  │    │  Input   │    │  Subscription│    │   (Backend)      │
-└──────────┘    └──────────┘    └──────────────┘    └──────────────────┘
-     ▲                                                      │
-     │                                                      │
-     │              ┌───────────────────────────────────────┘
-     │              │
-     │              ▼
-     │     ┌──────────────────────────────────────────────────────┐
-     │     │              REAL-TIME EVENT STREAM                  │
-     │     │                                                      │
-     │     │  1. THINKING     → "Analyzing your request..."       │
-     │     │  2. TOOL_CALL    → search_developers                 │
-     │     │  3. TOOL_RESULT  → "Found 15 candidates"             │
-     │     │  4. MATCH_FOUND  → Developer card with score         │
-     │     │  5. COMPLETE     → Summary message                   │
-     │     │                                                      │
-     └─────│──────────────────────────────────────────────────────│
-           │                                                      │
-           └──────────────────────────────────────────────────────┘
+┌──────────┐    ┌──────────┐    ┌──────────────────┐    ┌────────────────┐
+│  User    │───►│  ai-match│───►│ POST /sessions/  │───►│  Backend       │
+│  prompt  │    │  page    │    │ {id}/messages    │    │  LLM loop      │
+└──────────┘    └──────────┘    └──────────────────┘    └────────────────┘
+     ▲                                  │                       │
+     │                                  ▼                       │
+     │              ┌──────────────────────────────┐            │
+     │              │   useAIMatch hook            │            │
+     │              │   • parseSSE → reducer       │            │
+     │              │   • localStorage sessionId   │            │
+     │              │   • auto-resume orphans      │            │
+     │              │   • guest-claim on signup    │            │
+     │              └──────────────────────────────┘            │
+     │                       │                                  │
+     │                       │                                  │
+     │                       ▼                                  │
+     │     ┌──────────────────────────────────────────────────┐ │
+     │     │              SSE EVENT TYPES                     │ │
+     │     │                                                  │ │
+     │     │  CONNECTED → sessionId + rateLimit               │◄┘
+     │     │  TOOL_CALL → "Searching by meaning…"             │
+     │     │  TOOL_RESULT → updates working indicator         │
+     │     │  MATCH_FOUND → adds card to assistant message    │
+     │     │  COMPLETE → finalizes summary                    │
+     │     │  ERROR / CANCELLED / RATE_LIMITED → terminal     │
+     │     │                                                  │
+     └─────│──────────────────────────────────────────────────│
+           │                                                  │
+           └──────────────────────────────────────────────────┘
+```
+
+### Voice Onboarding (developers)
+
+```
+┌──────────┐    ┌──────────────┐    ┌──────────────┐    ┌─────────────────┐
+│  Record  │───►│  POST        │───►│  Backend     │───►│  Whisper STT    │
+│  audio   │    │  /me/answer  │    │  routes      │    │  + Claude       │
+└──────────┘    └──────────────┘    └──────────────┘    └─────────────────┘
+                                                                │
+                  ┌─────────────────────────────────────────────┘
+                  │   After 5 answers → POST /me/extract
+                  ▼
+        ┌────────────────────────┐
+        │  ReviewDraft form      │
+        │  • Photo upload        │
+        │  • Video upload        │
+        │  • Edit bio/tech/exp   │
+        │  → POST /me/complete   │
+        └────────────────────────┘
+                  │
+                  ▼
+        ┌────────────────────────┐
+        │  Refetch developerMe   │
+        │  → DeveloperProfile    │
+        │    (editor view)       │
+        └────────────────────────┘
 ```
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|------------|
-| Framework | Next.js 16 (App Router) |
-| UI | React 19 |
-| API | Apollo Client + GraphQL |
-| Real-time | GraphQL Subscriptions (graphql-ws) |
-| Auth | Auth0 |
-| Forms | React Hook Form |
+| Layer | Choice |
+|---|---|
+| Framework | Next.js 16 (App Router) + React 19 |
+| Auth | Auth0 (`@auth0/auth0-react`) |
+| Data fetching | `@tanstack/react-query` v5 |
+| API client | Custom `apiFetch` wrapper over `fetch` (with JWT injection + JSON parsing) |
+| Generated types | `swagger-typescript-api` reads `/openapi.json` → `src/lib/api/generated-types.ts` |
+| Streaming | `fetch + ReadableStream` + custom `parseSSE` (POST body + Auth header — `EventSource` can't do that) |
+| Forms | `react-hook-form` |
 | Styling | Tailwind CSS 4 |
-| Carousel | Swiper |
-| Notifications | Sonner |
+| Toasts | `sonner` |
+| Carousel | `swiper` (used in landing) |
+| State | tanstack-query cache + a few small contexts. No Redux. |
 
-## Project Structure
+## Services
 
-```
-frontend/
-└── src/
-    ├── app/                      # Next.js App Router pages
-    │   ├── page.tsx              # Landing page
-    │   ├── join/                 # Role selection
-    │   ├── signin/               # Auth0 sign-in
-    │   └── dashboard/            # Protected routes
-    │       ├── page.tsx          # Developer video feed
-    │       ├── developers/       # Browse & profile view
-    │       ├── shortlist/        # Saved developers
-    │       ├── ai-match/         # AI matching chat
-    │       ├── profile/          # Edit profile
-    │       └── settings/         # Account settings
-    │
-    ├── components/
-    │   ├── ui/                   # 30+ reusable components
-    │   │   ├── Button.tsx
-    │   │   ├── DevCard.tsx
-    │   │   ├── VideoPlayer.tsx
-    │   │   └── ...
-    │   ├── ai-match/             # AI chat components
-    │   ├── profile/              # Profile & onboarding
-    │   ├── layout/               # Header, Footer, DashboardLayout
-    │   └── icons/                # SVG icon components
-    │
-    ├── hooks/
-    │   ├── useAuth.ts            # Auth utilities
-    │   ├── useUser.ts            # Current user data
-    │   ├── useShortlist.ts       # Shortlist management
-    │   └── useAIMatch.ts         # AI matching state machine
-    │
-    ├── lib/
-    │   ├── graphql/
-    │   │   ├── operations.ts     # Queries & mutations
-    │   │   └── generated.ts      # Auto-generated types
-    │   ├── constants.ts          # App constants
-    │   └── utils/                # Helper functions
-    │
-    └── providers/
-        ├── Auth0Provider.tsx     # Auth0 configuration
-        ├── ApolloProvider.tsx    # GraphQL client + WebSocket
-        └── ShortlistSync.tsx     # Guest → User sync
-```
+| Origin | Purpose |
+|---|---|
+| Auth0 | JWT issuer; SDK in `@/providers/Auth0Provider` |
+| FastAPI backend (`http://localhost:4000`) | REST + SSE; routes mounted under `/api/*` |
+| localStorage | Guest shortlist + AI Match `sessionId` + onboarding "skip interview" flag |
 
-## Key Features
-
-### User Roles
-
-| Role | Capabilities |
-|------|--------------|
-| **Developer** | Create profile, upload video, add experience/projects |
-| **Recruiter** | Browse developers, manage shortlist (max 5), AI match |
-| **Guest** | Browse feed, save to localStorage shortlist |
-
-### Shortlist System
+## Project structure
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                      SHORTLIST FLOW                             │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Guest User                    Authenticated User               │
-│  ───────────                   ──────────────────               │
-│  │                             │                                │
-│  ▼                             ▼                                │
-│  localStorage ──────────────► API (on login)                    │
-│  (max 5 IDs)                  (full sync)                       │
-│                                                                 │
-│  Features:                                                      │
-│  • Instant add/remove                                           │
-│  • Cross-session persistence                                    │
-│  • Automatic deduplication on merge                             │
-│  • Real-time count badge                                        │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+src/
+├── app/                       # Next.js App Router
+│   ├── layout.tsx             # Root layout — providers nested top-down
+│   ├── page.tsx               # Landing
+│   ├── signin/                # Auth0 redirect
+│   ├── welcome/               # Role picker (gated by EnsureProfile)
+│   ├── dashboard/
+│   │   ├── page.tsx           # Developer feed
+│   │   ├── developers/        # Listing + profile view
+│   │   ├── shortlist/         # Saved devs (max 5)
+│   │   ├── ai-match/          # SSE recruiter chat
+│   │   ├── profile/           # Edit own profile / onboarding wrapper
+│   │   └── settings/
+│   └── dev/voice-test/        # Internal dev tool — Whisper STT smoke
+├── components/
+│   ├── ai-match/              # Chat UI: ChatMessage, MatchPageHeader, AIWorkingIndicator…
+│   ├── auth/                  # ProtectedRoute
+│   ├── home/                  # Landing sections (HomeHero, HomeFeed, HomeAIMatch…)
+│   ├── icons/                 # SVG components
+│   ├── layout/                # Header, Footer, DashboardLayout
+│   ├── profile/               # Profile editor + onboarding flow
+│   │   ├── DeveloperProfile.tsx       # Recruiter-view + dev-self-view editor
+│   │   ├── forms/                     # BasicInfo, About, TechStack, Experience, Certifications, IntroVideo, ProfilePhoto, Availability
+│   │   └── onboarding/                # Manual flow + interview/* (voice)
+│   └── ui/                    # 30+ primitives (Button, Input, Modal, …)
+├── contexts/
+│   └── OnboardingContext.tsx  # showOnboardingComplete wrapper lock
+├── hooks/
+│   ├── useAuth.ts             # Auth0 wrapper
+│   ├── useAIMatch.ts          # Chat session state machine (mounted by /ai-match page)
+│   ├── useShortlist.ts        # Guest-localStorage + API merge
+│   └── useUser.ts             # Reads me/developerMe/recruiterMe queries
+├── lib/
+│   ├── api/                   # ApiProvider, apiFetch, generated types, hooks, sse parser
+│   ├── constants.ts           # AVAILABILITY_STATUS labels, etc.
+│   └── utils/
+└── providers/
+    ├── Auth0Provider.tsx      # Validates env at startup
+    ├── EnsureProfile.tsx      # /welcome redirect for signup-incomplete users
+    └── ShortlistSync.tsx      # On login: merge guest shortlist → API
 ```
 
-### Developer Onboarding
+## Environment Variables
 
-7-step flow: Role → Photo → Video → Tech Stack → Experience → Links → Done
+```env
+# Auth0 (REQUIRED — Auth0Provider throws if missing)
+NEXT_PUBLIC_AUTH0_DOMAIN=
+NEXT_PUBLIC_AUTH0_CLIENT_ID=
+NEXT_PUBLIC_AUTH0_AUDIENCE=
+
+# FastAPI backend
+NEXT_PUBLIC_API_URL=http://localhost:4000
+```
 
 ## Scripts
 
-| Command | Description |
-|---------|-------------|
-| `npm run dev` | Start development server |
-| `npm run build` | Production build |
-| `npm run start` | Start production server |
-| `npm run lint` | Run ESLint |
-| `npm run codegen` | Generate GraphQL types |
-| `npm run codegen:watch` | Watch mode for codegen |
+```bash
+yarn dev          # Start dev server (uses Turbopack via Next 16)
+yarn build        # Production build
+yarn start        # Start production server
+yarn lint         # eslint
+yarn gen:api      # Regenerate TS types from backend's /openapi.json
+```
+
+Run `yarn gen:api` whenever the backend schema changes. Requires the
+backend to be running at `localhost:4000`.
+
+## Backend integration
+
+The backend is a FastAPI/REST service in a separate repo
+([devMatch-backend-fastapi](https://github.com/dima-mamaev/devMatch-backend-fastapi)).
+The frontend reads `http://localhost:4000/openapi.json` at build-time via
+`yarn gen:api` to produce `src/lib/api/generated-types.ts`. Hand-written
+client wrappers (`src/lib/api/hooks/*.ts`) consume those types and expose
+tanstack-query hooks per endpoint.
+
+AI Match uses Server-Sent Events streamed from `POST
+/api/ai-match/sessions/{id}/messages`. We use `fetch + ReadableStream`
++ a custom `parseSSE` async generator rather than the browser's
+`EventSource`, because `EventSource` doesn't support POST bodies or
+`Authorization` headers.
+</content>
+</invoke>

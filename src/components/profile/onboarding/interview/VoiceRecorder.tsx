@@ -126,6 +126,14 @@ export function VoiceRecorder({
       return;
     }
 
+    // ``tick`` self-schedules. The lint rule flags this because the
+    // closure captures the initial ``tick`` reference — which would be
+    // stale if ``tick`` were ever re-created. Here ``stopRecording`` is
+    // ``useCallback(..., [])`` so ``tick`` is created exactly once and
+    // the self-ref resolves to the same instance forever. Suppression is
+    // correct; the alternative (ref trampoline) is more code for no
+    // behavior change.
+    // eslint-disable-next-line react-hooks/immutability
     rafRef.current = requestAnimationFrame(tick);
   }, [stopRecording]);
 
